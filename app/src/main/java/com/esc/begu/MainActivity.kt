@@ -18,18 +18,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var transcriptionButton: Button // Botón para cambiar a la vista de reconocimiento de voz
     private lateinit var signButton: Button          // Botón para cambiar a la vista de reconocimiento de LS
 
-    /**
-     * Componentes que se crean al iniciar la Activity
-     */
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // Inicializar elementos de la UI
         transcriptionButton = findViewById(R.id.transcriptionButton)
         signButton = findViewById(R.id.signButton)
 
-        // Verificar y solicitar permisos antes de iniciar la aplicación
         if (!allPermissionsGranted()) {
             ActivityCompat.requestPermissions(this, Permissions.REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS)
         }
@@ -48,16 +43,10 @@ class MainActivity : AppCompatActivity() {
 
     }
 
-    /**
-     * Comprueba si se conceden todos los permisos necesarios
-     */
     private fun allPermissionsGranted() = Permissions.REQUIRED_PERMISSIONS.all {
         ContextCompat.checkSelfPermission(baseContext, it) == PackageManager.PERMISSION_GRANTED
     }
 
-    /**
-     * Maneja el resultado de las solicitudes de permisos
-     */
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQUEST_CODE_PERMISSIONS) {
@@ -68,9 +57,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Variables inmutables
-     */
     companion object {
         const val REQUEST_CODE_PERMISSIONS = 10
     }

@@ -34,7 +34,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.getValue
 
 // TensorFlow
-import com.esc.begu.model.ModelFunctions
+import com.esc.begu.tflite.TFLiteFunctions
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import kotlin.collections.List
 
@@ -49,9 +49,6 @@ class SignLangActivity : AppCompatActivity(),
     // MediaPipe LandMarkers Components ////////////////////////////////////////////////////////////
     companion object {
         private const val LM_TAG   = "LandMarker"
-//        private const val HAND_TAG = "Hand LandMarker"
-//        private const val FACE_TAG = "Face LandMarker"
-//        private const val POSE_TAG = "Pose LandMarker"
     }
 
     private lateinit var binding: ActivitySignBinding
@@ -62,7 +59,7 @@ class SignLangActivity : AppCompatActivity(),
     private var imageAnalyzer: ImageAnalysis? = null
     private var camera: Camera? = null
     private var cameraProvider: ProcessCameraProvider? = null
-    private var cameraFacing = CameraSelector.LENS_FACING_FRONT
+    private var cameraFacing = CameraSelector.LENS_FACING_BACK
 
     /** Blocking ML operations are performed using this executor */
     private lateinit var backgroundExecutor: ExecutorService
@@ -80,11 +77,10 @@ class SignLangActivity : AppCompatActivity(),
     // Componentes de la camara
     private var cameraSelector =
         CameraSelector.Builder().requireLensFacing(cameraFacing).build()
-    private var isFrontCamera: Boolean = true
-    private var isLandmarksView: Boolean = true
+    private var isLandmarksView: Boolean = false
 
     // Componentes del modelo TFLite
-    val modelFunctions = ModelFunctions(this@SignLangActivity)
+    val modelFunctions = TFLiteFunctions(this@SignLangActivity)
 
     // Listas
     var handList: List<List<NormalizedLandmark>> = emptyList()     //  21 puntos por mano (42 total)
@@ -111,7 +107,6 @@ class SignLangActivity : AppCompatActivity(),
 
         binding = ActivitySignBinding.inflate(layoutInflater)
         setContentView(binding.root)
-        //setContentView(R.layout.activity_sign)
 
         // Inicializar elementos de la UI
         cameraView = findViewById(R.id.cameraView)
@@ -121,9 +116,14 @@ class SignLangActivity : AppCompatActivity(),
         cameraSwitchButton = findViewById(R.id.cameraSwitchButton)
         landmarksViewButton = findViewById(R.id.landmarksViewButton)
 
-        // Cargar Modelo TFLite
-        modelFunctions.loadModelFile()
-
+        if (!allPermissionsGranted()) {
+            ActivityCompat.requestPermissions(
+                this,
+                Permissions.REQUIRED_PERMISSIONS,
+                REQUEST_CODE_PERMISSIONS)
+        } else {
+            modelFunctions.loadModelFile()  // Cargar Modelo TFLite
+        }
         handList = emptyList()
         faceList = emptyList()
         poseList = emptyList()
@@ -135,10 +135,7 @@ class SignLangActivity : AppCompatActivity(),
         backgroundExecutor = Executors.newSingleThreadExecutor()
 
         // Wait for the views to be properly laid out
-        binding.cameraView.post {
-            // Set up the camera and its use cases
-            setUpCamera()
-        }
+        binding.cameraView.post { setUpCamera() } // Set up the camera and its use cases
 
         // Create the MultiLandmarkerHelper that will handle the inference
         backgroundExecutor.execute {
@@ -195,40 +192,27 @@ class SignLangActivity : AppCompatActivity(),
             // Needs to be cleared instead of reinitialized because the GPU
             // delegate needs to be initialized on the thread using it when applicable
             backgroundExecutor.execute { multiLandmarkerHelper.clearMultiLandmarker() }
-            binding.handOverlay.clear()
-            binding.faceOverlay.clear()
-            binding.poseOverlay.clear()
+            clearBinding()
 
-
-            if(isFrontCamera) {
-                cameraFacing = CameraSelector.LENS_FACING_BACK
-                cameraSelector =
-                    CameraSelector.Builder().requireLensFacing(cameraFacing).build()
-                isFrontCamera = false
+            cameraFacing = if(CameraSelector.LENS_FACING_BACK == cameraFacing) {
+                CameraSelector.LENS_FACING_FRONT
+            } else{
+                CameraSelector.LENS_FACING_BACK
             }
-            else{
-                cameraFacing = CameraSelector.LENS_FACING_FRONT
-                cameraSelector =
-                    CameraSelector.Builder().requireLensFacing(cameraFacing).build()
-                isFrontCamera = true
-            }
+            cameraSelector =
+                CameraSelector.Builder().requireLensFacing(cameraFacing).build()
 
             backgroundExecutor.execute {
-                if (multiLandmarkerHelper.isClose()) {
-                    multiLandmarkerHelper.setupMultiLandmarker()
-                }
-
+                if (multiLandmarkerHelper.isClose()) multiLandmarkerHelper.setupMultiLandmarker()
             }
             setUpCamera()
         }
 
+        // Activar o desactivar Landmarkers
         landmarksViewButton.setOnClickListener {
             if (isLandmarksView) {
                 landmarksViewButton.setImageResource(R.drawable.outline_remove_red_eye_24)
-                binding.handOverlay.clear()
-                binding.faceOverlay.clear()
-                binding.poseOverlay.clear()
-
+                clearBinding()
                 isLandmarksView = false
             } else {
                 landmarksViewButton.setImageResource(R.drawable.baseline_remove_red_eye_24)
@@ -238,17 +222,25 @@ class SignLangActivity : AppCompatActivity(),
 
     }
 
-    // Función para comprobar si se conceden todos los permisos necesarios
+    // PERMISSIONS
     private fun allPermissionsGranted() = Permissions.REQUIRED_PERMISSIONS.all {
-        ContextCompat.checkSelfPermission(baseContext, it) == PackageManager.PERMISSION_GRANTED
+        ContextCompat.checkSelfPermission(baseContext,
+            it) == PackageManager.PERMISSION_GRANTED
     }
 
-    // Funcón que maneja el resultado de las solicitudes de permisos
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<String>,
+        grantResults: IntArray
+    ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQUEST_CODE_PERMISSIONS) {
             if (!allPermissionsGranted()) {
-                Toast.makeText(this, "Permisos no concedidos", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this,
+                    "Permisos no concedidos",
+                    Toast.LENGTH_SHORT
+                ).show()
                 finish()
             }
         }
@@ -299,69 +291,12 @@ class SignLangActivity : AppCompatActivity(),
         )
     }
 
+    private fun clearBinding() {
+        binding.handOverlay.clear()
+        binding.faceOverlay.clear()
+        binding.poseOverlay.clear()
+    }
     private fun initBottomSheetControls() {
-        // init bottom sheet settings
-//        binding.bottomSheetLayout.detectionThresholdValue.text =
-//            String.format(
-//                Locale.US, "%.2f", multiViewModel.currentMinDetectionConfidence
-//            )
-//        binding.bottomSheetLayout.trackingThresholdValue.text =
-//            String.format(
-//                Locale.US, "%.2f", multiViewModel.currentMinTrackingConfidence
-//            )
-//        binding.bottomSheetLayout.presenceThresholdValue.text =
-//            String.format(
-//                Locale.US, "%.2f", multiViewModel.currentMinPresenceConfidence
-//            )
-//
-//        // When clicked, lower hand detection score threshold floor
-//        binding.bottomSheetLayout.detectionThresholdMinus.setOnClickListener {
-//            if (multiLandmarkerHelper.minDetectionConfidence >= 0.2) {
-//                multiLandmarkerHelper.minDetectionConfidence -= 0.1f
-//                updateControlsUi()
-//            }
-//        }
-//
-//        // When clicked, raise hand detection score threshold floor
-//        binding.bottomSheetLayout.detectionThresholdPlus.setOnClickListener {
-//            if (multiLandmarkerHelper.minDetectionConfidence <= 0.8) {
-//                multiLandmarkerHelper.minDetectionConfidence += 0.1f
-//                updateControlsUi()
-//            }
-//        }
-//
-//        // When clicked, lower hand tracking score threshold floor
-//        binding.bottomSheetLayout.trackingThresholdMinus.setOnClickListener {
-//            if (multiLandmarkerHelper.minTrackingConfidence >= 0.2) {
-//                multiLandmarkerHelper.minTrackingConfidence -= 0.1f
-//                updateControlsUi()
-//            }
-//        }
-//
-//        // When clicked, raise hand tracking score threshold floor
-//        binding.bottomSheetLayout.trackingThresholdPlus.setOnClickListener {
-//            if (multiLandmarkerHelper.minTrackingConfidence <= 0.8) {
-//                multiLandmarkerHelper.minTrackingConfidence += 0.1f
-//                updateControlsUi()
-//            }
-//        }
-//
-//        // When clicked, lower hand presence score threshold floor
-//        binding.bottomSheetLayout.presenceThresholdMinus.setOnClickListener {
-//            if (multiLandmarkerHelper.minPresenceConfidence >= 0.2) {
-//                multiLandmarkerHelper.minPresenceConfidence -= 0.1f
-//                updateControlsUi()
-//            }
-//        }
-//
-//        // When clicked, raise hand presence score threshold floor
-//        binding.bottomSheetLayout.presenceThresholdPlus.setOnClickListener {
-//            if (multiLandmarkerHelper.minPresenceConfidence <= 0.8) {
-//                multiLandmarkerHelper.minPresenceConfidence += 0.1f
-//                updateControlsUi()
-//            }
-//        }
-
         // When clicked, change the underlying hardware used for inference.
         // Current options are CPU and GPU
         binding.bottomSheetLayout.spinnerDelegate.setSelection(
@@ -389,34 +324,13 @@ class SignLangActivity : AppCompatActivity(),
     // Update the values displayed in the bottom sheet. Reset MultiLandMarker
     // helper.
     private fun updateControlsUi() {
-//        binding.bottomSheetLayout.detectionThresholdValue.text =
-//            String.format(
-//                Locale.US,
-//                "%.2f",
-//                multiLandmarkerHelper.minDetectionConfidence
-//            )
-//        binding.bottomSheetLayout.trackingThresholdValue.text =
-//            String.format(
-//                Locale.US,
-//                "%.2f",
-//                multiLandmarkerHelper.minTrackingConfidence
-//            )
-//        binding.bottomSheetLayout.presenceThresholdValue.text =
-//            String.format(
-//                Locale.US,
-//                "%.2f",
-//                multiLandmarkerHelper.minPresenceConfidence
-//            )
-
         // Needs to be cleared instead of reinitialized because the GPU
         // delegate needs to be initialized on the thread using it when applicable
         backgroundExecutor.execute {
             multiLandmarkerHelper.clearMultiLandmarker()
             multiLandmarkerHelper.setupMultiLandmarker()
         }
-        binding.handOverlay.clear()
-        binding.faceOverlay.clear()
-        binding.poseOverlay.clear()
+        clearBinding()
     }
 
     // Initialize CameraX, and prepare to bind the camera use cases
@@ -481,7 +395,7 @@ class SignLangActivity : AppCompatActivity(),
     private fun detectMultiLandmaker(imageProxy: ImageProxy) {
         multiLandmarkerHelper.detectLiveStream(
             imageProxy = imageProxy,
-            isFrontCamera = isFrontCamera
+            isFrontCamera = cameraFacing == CameraSelector.LENS_FACING_FRONT
         )
     }
 
@@ -583,9 +497,7 @@ class SignLangActivity : AppCompatActivity(),
     }
 
     override fun onEmpty() {
-        binding.handOverlay.clear()
-        binding.faceOverlay.clear()
-        binding.poseOverlay.clear()
+        clearBinding()
     }
 
     override fun onError(error: String, errorCode: Int) {

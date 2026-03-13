@@ -3,26 +3,14 @@
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Funciones Cámara -->
+    <!-- Cámara Functions -->
     <uses-feature
         android:name="android.hardware.camera"
         android:required="false" />
 
-    <!-- Permiso de Cámara -->
+    <!-- Permissions -->
     <uses-permission android:name="android.permission.CAMERA" />
-
-    <!-- Permiso de Grabación de Audio -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-
-    <!-- Permisos de Almacenamiento -->
-    <!-- <uses-permission
-        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32"
-        tools:ignore="ScopedStorage" />
-    <uses-permission
-        android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32"
-        tools:ignore="ScopedStorage" /> -->
 
     <!-- x -->
     <application

@@ -8,10 +8,10 @@ import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.EditText
 import androidx.appcompat.app.AppCompatActivity
-
+import androidx.core.app.ActivityCompat
 import android.view.View
 import android.view.WindowManager
-//import java.util.*
+import com.esc.begu.MainActivity.Companion.REQUEST_CODE_PERMISSIONS
 
 // Camera
 import android.widget.Toast
@@ -20,18 +20,27 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 
-// Speech
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
-import androidx.core.app.ActivityCompat
-import com.esc.begu.MainActivity.Companion.REQUEST_CODE_PERMISSIONS
+// Vosk Speech
+import org.vosk.Model
+import org.vosk.Recognizer
+import org.vosk.android.RecognitionListener
+import org.vosk.android.SpeechService
+import org.vosk.android.StorageService
+import org.json.JSONObject
 
 /**
  * Pantalla correspondiente a la Transcripcción de Voz a Texto
  */
 class TranscriptionActivity : AppCompatActivity(),
     RecognitionListener {
+
+    // Estados de la UI
+    companion object {
+        const val STATE_CAMERA_ON: Int = 0
+        const val STATE_CAMERA_OFF: Int = 1
+        const val STATE_MIC_ON: Int = 2
+        const val STATE_MIC_OFF: Int = 3
+    }
 
     // Componentes de la UI
     private lateinit var cameraView: PreviewView            // Muestra la vista de la cámara.
@@ -42,12 +51,12 @@ class TranscriptionActivity : AppCompatActivity(),
     private lateinit var cameraButton: ImageButton          // Botón abrir el menú de opciones
 
     // Componentes para la transcripción de voz a texto
-    private lateinit var speechRecognizer: SpeechRecognizer
+    private lateinit var model: Model
+    private var speechService: SpeechService? = null
     private var isListening: Boolean = false
     private lateinit var textView: TextView
     private lateinit var editTextView: EditText
     private var textSave: String = ""
-    private val recognizerIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
 
     // Componentes de la cámara
     private var cameraProvider: ProcessCameraProvider? = null
@@ -92,124 +101,130 @@ class TranscriptionActivity : AppCompatActivity(),
         editTextView = findViewById(R.id.editTextView)
         blackOverlay = findViewById(R.id.blackOverlay)
 
-        // Activar cámara
-        startCamera()
-
-        // Inicializar reconocedor de voz
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this@TranscriptionActivity)
-
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "es-CL")
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "es-CL")
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, "es-CL")
-
-        //recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-        //recognizerIntent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true) // Forzar modo offline
-
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true) //Transcripcion en tiempo real activado
-
-        speechRecognizer.setRecognitionListener(this@TranscriptionActivity)
+        if (!allPermissionsGranted()) {
+            ActivityCompat.requestPermissions(
+                this,
+                Permissions.REQUIRED_PERMISSIONS,
+                REQUEST_CODE_PERMISSIONS)
+        } else {
+            startCamera()   // Activar cámara
+            initModel()     // Cargar modelo de reconocimiento de voz
+        }
 
         // Cambiar a la vista del menú principal
         backButton.setOnClickListener {
-            speechRecognizer.destroy()
-            val intent = Intent(this@TranscriptionActivity, MainActivity::class.java)
+            if (speechService != null) {
+                speechService!!.stop()
+                speechService!!.shutdown()
+            }
+            val intent = Intent(this@TranscriptionActivity,
+                MainActivity::class.java)
             startActivity(intent)
         }
 
         // Cambiar a la vista de reconocimiento de LS
         signButton.setOnClickListener {
-            speechRecognizer.destroy()
-            val intent = Intent(this@TranscriptionActivity, SignLangActivity::class.java)
+            if (speechService != null) {
+                speechService!!.stop()
+                speechService!!.shutdown()
+            }
+            val intent = Intent(this@TranscriptionActivity,
+                SignLangActivity::class.java)
             startActivity(intent)
         }
 
-        // Activar/Desactivar micrófono e iniciar/detener reconocimiento de voz
+        // Activar o desactivar micrófono
         micButton.setOnClickListener {
-            if (!isListening) {
-                // Cambiar elementos de la UI
-                if (isCameraOn) textView.visibility = View.VISIBLE
-                micButton.setImageResource(R.drawable.baseline_mic_24)
-
-                // Comenzar transcripcion de voz a texto
-                isListening = true
-
-                textSave = (editTextView.text.toString() + " ")
-                speechRecognizer.startListening(recognizerIntent)
-            }
-
-            else {
-                // Cambiar elementos de la UI
-                if (isCameraOn) textView.visibility = View.INVISIBLE
-                micButton.setImageResource(R.drawable.baseline_mic_off_24)
-
-                // Detener transcripcion de voz a texto
-                isListening = false
-                speechRecognizer.stopListening()
-                textView.text = " "
+            if (isListening) {
+                setUI(STATE_MIC_OFF)
+            } else {
+                setUI(STATE_MIC_ON)
             }
         }
 
         // Cambiar la vista de la cámara
         cameraSwitchButton.setOnClickListener {
+            if (isListening) setUI(STATE_MIC_OFF)
+
             if (isFrontCamera) {
                 cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
                 isFrontCamera = false
-            }
-            else {
+            } else {
                 cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
                 isFrontCamera = true
             }
-
             startCamera()
         }
 
+        // Activar o desactivar cámara
         cameraButton.setOnClickListener {
             if (isCameraOn) {
-                // Cambiar elementos de la UI
-                cameraSwitchButton.visibility = View.INVISIBLE
-                textView.visibility = View.INVISIBLE
-                editTextView.visibility = View.VISIBLE
-
-                micButton.setImageResource(R.drawable.baseline_mic_off_24)
-                cameraButton.setImageResource(R.drawable.outline_videocam_off_24)
-
-                // Detener transcripcion de voz a texto
-                isListening = false
-                speechRecognizer.stopListening()
-                textView.text = " "
-
-                // Detener Camara
-                cameraProvider?.unbindAll()
-                blackOverlay.visibility = View.VISIBLE
-
-                isCameraOn = false
+                setUI(STATE_CAMERA_OFF)
+            } else {
+                setUI(STATE_CAMERA_ON)
             }
+        }
 
-            else {
-                // Cambiar elementos de la UI
+    }
+
+    private fun setUI(state: Int) {
+        when (state) {
+            STATE_CAMERA_ON -> {
                 cameraSwitchButton.visibility = View.VISIBLE
                 textView.visibility = View.INVISIBLE
                 editTextView.visibility = View.INVISIBLE
                 micButton.setImageResource(R.drawable.baseline_mic_off_24)
                 cameraButton.setImageResource(R.drawable.outline_videocam_24)
 
-                // Detener transcripcion de voz a texto
                 isListening = false
-                speechRecognizer.stopListening()
+                if (speechService != null) speechService!!.stop()
                 textView.text = " "
 
-                // Activar Camara
+                isCameraOn = true
                 startCamera()
                 blackOverlay.visibility = View.INVISIBLE
-
-                isCameraOn = true
             }
 
-        }
+            STATE_CAMERA_OFF -> {
+                cameraSwitchButton.visibility = View.INVISIBLE
+                textView.visibility = View.INVISIBLE
+                editTextView.visibility = View.VISIBLE
+                micButton.setImageResource(R.drawable.baseline_mic_off_24)
+                cameraButton.setImageResource(R.drawable.outline_videocam_off_24)
 
+                isListening = false
+
+                if (speechService != null) speechService!!.stop()
+                textView.text = " "
+
+                cameraProvider?.unbindAll()
+                blackOverlay.visibility = View.VISIBLE
+                isCameraOn = false
+            }
+
+            STATE_MIC_ON -> {
+                if (isCameraOn) textView.visibility = View.VISIBLE
+                micButton.setImageResource(R.drawable.baseline_mic_24)
+
+                isListening = true
+                textView.text = " "
+                textSave = (editTextView.text.toString() + " ")
+                val rec = Recognizer(model, 16000.0f)
+                speechService = SpeechService(rec, 16000.0f)
+                speechService!!.startListening(this)
+            }
+
+            STATE_MIC_OFF -> {
+                if (isCameraOn) textView.visibility = View.INVISIBLE
+                micButton.setImageResource(R.drawable.baseline_mic_off_24)
+
+                isListening = false
+                textView.text = " "
+                if (speechService != null) speechService!!.stop()
+            }
+        }
     }
 
-    // Función que activa y muestra la vista de la cámara
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this@TranscriptionActivity)
 
@@ -232,54 +247,58 @@ class TranscriptionActivity : AppCompatActivity(),
         }, ContextCompat.getMainExecutor(this@TranscriptionActivity))
     }
 
+    private fun initModel() {
+        StorageService.unpack(
+            this, "model-es", "model",
+            { model: Model? ->
+                this.model = model!!
+            },
+            { Toast.makeText(this,
+                "Fallo al cargar el modelo",
+                Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
     override fun onResume() {
         super.onResume()
-        // Redundancia
         if (isListening) {
-            // Cambiar Visibilidad de Elementos del UI
-            micButton.visibility = View.VISIBLE
-            textView.visibility = View.INVISIBLE
-
-            // Detener transcripcion de voz a texto
-            isListening = false
-            speechRecognizer.stopListening()
-            textView.text = " "
+            setUI(STATE_MIC_OFF)
         }
-
-        // Verificar y solicitar permisos antes de iniciar la aplicación
         if (!allPermissionsGranted()) {
-            ActivityCompat.requestPermissions(this, Permissions.REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS)
+            ActivityCompat.requestPermissions(
+                this,
+                Permissions.REQUIRED_PERMISSIONS,
+                REQUEST_CODE_PERMISSIONS)
         }
     }
 
     override fun onPause() {
         super.onPause()
-        // Detener reconocimiento de voz
         if (isListening) {
-            // Cambiar Visibilidad de Elementos del UI
-            micButton.visibility = View.VISIBLE
-            textView.visibility = View.INVISIBLE
-
-            // Detener transcripcion de voz a texto
-            isListening = false
-            speechRecognizer.stopListening()
-            textView.text = " "
+            setUI(STATE_MIC_OFF)
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-
-        speechRecognizer.destroy()
+        if (speechService != null) {
+            speechService!!.stop()
+            speechService!!.shutdown()
+        }
     }
 
-    // Función para comprobar si se conceden todos los permisos necesarios
+    // PERMISSIONS
     private fun allPermissionsGranted() = Permissions.REQUIRED_PERMISSIONS.all {
-        ContextCompat.checkSelfPermission(baseContext, it) == PackageManager.PERMISSION_GRANTED
+        ContextCompat.checkSelfPermission(baseContext,
+            it) == PackageManager.PERMISSION_GRANTED
     }
 
-    // Funcón que maneja el resultado de las solicitudes de permisos
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<String>,
+        grantResults: IntArray) {
+
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQUEST_CODE_PERMISSIONS) {
             if (!allPermissionsGranted()) {
@@ -289,44 +308,31 @@ class TranscriptionActivity : AppCompatActivity(),
         }
     }
 
-    // ///// Funciones de RecognitionListener{} ////////////////////////////////////////////////////
-    override fun onReadyForSpeech(params: Bundle?) {}
-    override fun onBeginningOfSpeech() {}
-    override fun onRmsChanged(rmsdB: Float) {}
-    override fun onBufferReceived(buffer: ByteArray?) {}
-    override fun onEndOfSpeech() {}
+    // ///// Vosk Functions ////////////////////////////////////////////////////////////////////////
+    private fun showText(name: String, hypothesis: String){
+        val json = JSONObject(hypothesis)
+        val result: String  = json.optString(name, "")
 
-    override fun onError(error: Int) {
+        if (!result.isEmpty()) {
+            textView.text = result
+            editTextView.setText(textSave + result)
+            editTextView.setSelection(editTextView.text.length)
+        }
+    }
+
+    override fun onPartialResult(hypothesis: String) { showText("partial", hypothesis) }
+
+    override fun onResult(hypothesis: String) { showText("text", hypothesis) }
+
+    override fun onFinalResult(hypothesis: String) { showText("text", hypothesis) }
+
+    override fun onError(e: Exception) {
         textView.text = " "
-
-        // Continuar con el reconocimiento de voz
-        if (isListening) {
-            speechRecognizer.startListening(recognizerIntent)
-        }
+        if (isListening) speechService!!.startListening(this) // Continuar reconocimiento de voz
     }
 
-    @SuppressLint("SetTextI18n")
-    override fun onResults(results: Bundle?) {
-        val transcription = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-        textView.text = transcription?.get(0)?.takeLast(90) ?: " "
-        editTextView.setText(textSave + transcription?.get(0))
-        editTextView.setSelection(editTextView.text.length)
-
-        // Continuar con el reconocimiento de voz
-        if (isListening) {
-            textSave = (editTextView.text.toString() + " ")
-            speechRecognizer.startListening(recognizerIntent)
-        }
+    override fun onTimeout() {
+        TODO("Not yet implemented")
     }
-
-    @SuppressLint("SetTextI18n")
-    override fun onPartialResults(partialResults: Bundle?) {
-        val transcription = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-        textView.text = transcription?.get(0)?.takeLast(90) ?: " "
-        editTextView.setText(textSave + transcription?.get(0))
-        editTextView.setSelection(editTextView.text.length)
-    }
-
-    override fun onEvent(eventType: Int, params: Bundle?) {}
     ////////////////////////////////////////////////////////////////////////////////////////////////
 }
